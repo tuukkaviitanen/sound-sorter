@@ -42,6 +42,15 @@ services:
       DUMBDROP_UPLOAD_DIR: /app/uploads
       MAX_ZIP_BYTES: "21474836480"
       MAX_ZIP_FILES: "10000"
+      # Optional Music Assistant integration; disabled while MA_URL is empty.
+      MA_URL: "${MA_URL:-}"
+      MA_TOKEN: "${MA_TOKEN:-}"
+      MA_TOKEN_FILE: "${MA_TOKEN_FILE:-}"
+      MA_MUSIC_PROVIDER: "${MA_MUSIC_PROVIDER:-}"
+      MA_AUDIOBOOK_PROVIDER: "${MA_AUDIOBOOK_PROVIDER:-}"
+      MA_SYNC_DEBOUNCE_SECONDS: "${MA_SYNC_DEBOUNCE_SECONDS:-30}"
+      MA_SYNC_TIMEOUT_SECONDS: "${MA_SYNC_TIMEOUT_SECONDS:-5}"
+      MA_SYNC_RETRY_SECONDS: "${MA_SYNC_RETRY_SECONDS:-30}"
     read_only: true
     tmpfs:
       - /tmp

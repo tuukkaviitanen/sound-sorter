@@ -1,3 +1,4 @@
+pub mod ma_sync;
 use anyhow::{Context, Result, ensure};
 use lofty::{
     config::ParseOptions,
@@ -6,6 +7,7 @@ use lofty::{
     prelude::Accessor,
     probe::Probe,
 };
+use ma_sync::{MaConfig, MusicAssistant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -193,7 +195,7 @@ fn unique(path: &Path, number: usize) -> PathBuf {
         .unwrap_or_default();
     path.with_file_name(format!("{stem} ({number}){ext}"))
 }
-pub fn transfer(source: &Path, destination: &Path) -> Result<()> {
+pub fn transfer(source: &Path, destination: &Path) -> Result<bool> {
     safe_destination(destination)?;
     fs::create_dir_all(destination.parent().context("No destination parent")?)?;
     let before = signature(source)?;
@@ -207,7 +209,7 @@ pub fn transfer(source: &Path, destination: &Path) -> Result<()> {
                 ensure!(signature(source)? == before, "Source changed");
                 fs::remove_file(source)?;
                 eprintln!("Removed identical duplicate {}", source.display());
-                return Ok(());
+                return Ok(false);
             }
             number += 1;
             continue;
@@ -230,7 +232,7 @@ pub fn transfer(source: &Path, destination: &Path) -> Result<()> {
                 File::open(target.parent().unwrap())?.sync_all()?;
                 fs::remove_file(source)?;
                 eprintln!("Moved {} -> {}", source.display(), target.display());
-                return Ok(());
+                return Ok(true);
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 number += 1;
@@ -264,6 +266,7 @@ pub struct Sorter {
     archives: HashMap<PathBuf, (Signature, String)>,
     empty_since: HashMap<PathBuf, (Signature, Instant)>,
     pub pending: bool,
+    sync: Option<MusicAssistant>,
 }
 impl Sorter {
     pub fn new(mut config: Config) -> Result<Self> {
@@ -290,7 +293,56 @@ impl Sorter {
             archives: HashMap::new(),
             empty_since: HashMap::new(),
             pending: false,
+            sync: None,
         })
+    }
+    pub fn enable_sync(&mut self, config: Option<MaConfig>, now: Instant) -> Result<()> {
+        self.sync = config
+            .map(|config| MusicAssistant::new(config, &self.state.join("ma-sync.json"), now))
+            .transpose()?;
+        Ok(())
+    }
+    pub fn sync_wait(&self, now: Instant) -> Option<Duration> {
+        self.sync.as_ref().and_then(|sync| sync.wait(now))
+    }
+    pub fn defer_sync(&mut self, now: Instant) {
+        if let Some(sync) = &mut self.sync {
+            sync.defer(now);
+        }
+    }
+    pub fn sync_if_due(&mut self, now: Instant) {
+        if !self.sync.as_ref().is_some_and(|sync| sync.due(now)) {
+            return;
+        }
+        let busy = (|| -> Result<bool> {
+            if self.pending || !self.active_directories()?.is_empty() {
+                return Ok(true);
+            }
+            for entry in WalkDir::new(&self.config.uploads)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| e.depth() == 0 || !hidden(e.path()))
+            {
+                let entry = entry?;
+                if entry.file_type().is_file() && extension(entry.path()) == "partial" {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })();
+        let sync = self.sync.as_mut().unwrap();
+        match busy {
+            Ok(false) => {
+                if let Err(error) = sync.send(now) {
+                    eprintln!("Music Assistant sync pending; will retry: {error:#}");
+                }
+            }
+            Ok(true) => sync.defer(now),
+            Err(_) => {
+                eprintln!("Deferring Music Assistant sync: upload state cannot be read");
+                sync.defer(now);
+            }
+        }
     }
     fn ready(&mut self, path: &Path, now: Instant) -> Result<bool> {
         let sig = signature(path)?;
@@ -320,7 +372,12 @@ impl Sorter {
         let mut extraction_roots = HashSet::new();
         for entry in fs::read_dir(&self.state)? {
             let path = entry?.path();
-            if extension(&path) == "json" && path.file_name().unwrap() != "music-folders.json" {
+            if extension(&path) == "json"
+                && !matches!(
+                    path.file_name().and_then(|n| n.to_str()),
+                    Some("music-folders.json" | "ma-sync.json")
+                )
+            {
                 let receipt: Receipt = serde_json::from_reader(File::open(path)?)?;
                 extraction_roots.insert(receipt.target);
             }
@@ -392,8 +449,9 @@ impl Sorter {
         if extension(path) == "zip" {
             return self.extract(path, depth, now);
         }
+        let book = audio(path) && self.is_book(path)?;
         let destination = if audio(path) {
-            if self.is_book(path)? {
+            if book {
                 self.config.books.join(relative)
             } else if relative.components().count() == 1 {
                 self.config.music.join("miscellaneous").join(relative)
@@ -415,7 +473,12 @@ impl Sorter {
         } else {
             return Ok(());
         };
-        transfer(path, &destination)
+        if transfer(path, &destination)?
+            && let Some(sync) = &mut self.sync
+        {
+            sync.mark(book, now)?;
+        }
+        Ok(())
     }
     fn extract(&mut self, archive: &Path, depth: usize, now: Instant) -> Result<()> {
         ensure!(depth < 5, "ZIP nesting limit reached");

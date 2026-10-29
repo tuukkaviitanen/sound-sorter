@@ -118,6 +118,69 @@ inputs retained for retry. Avoid uploading untrusted archives: extracted data
 and retained originals both consume disk space. Don't remove `.sorter/` while
 processing is pending.
 
+## Automatic Music Assistant synchronization (optional)
+
+The worker can request a [Music Assistant library sync](https://www.music-assistant.io/api/)
+after verified transfers, without another service or Home Assistant automation.
+It is disabled by default and makes no network requests while `MA_URL` is empty.
+
+1. Create a long-lived access token for an admin user in Music Assistant under
+   **Settings → Profile**.
+2. Find the **provider instance IDs** in the settings for your music and audiobook
+   local-files providers. These are not their display names. Music Assistant must
+   already be configured to read the same destination libraries.
+3. Copy `.env.example` to `.env` (or add these entries to an existing `.env`), then
+   configure the URL, token and relevant provider IDs:
+
+   ```dotenv
+   MA_URL=http://192.168.1.50:8095
+   MA_TOKEN=your-long-lived-token
+   MA_MUSIC_PROVIDER=your-music-provider-instance-id
+   MA_AUDIOBOOK_PROVIDER=your-audiobook-provider-instance-id
+   ```
+
+4. Rebuild and restart:
+
+   ```sh
+   docker compose up -d --build upload-sorter
+   docker compose logs -f upload-sorter
+   ```
+
+The URL must be reachable **from the container**. `localhost` refers to that
+container, not Home Assistant or the Docker host. A base URL or a URL ending in
+`/api` is accepted. HTTPS certificate validation is enabled; HTTP should only be
+used on a trusted network because the bearer token is sent with the request.
+Redirects are not followed. Keep `.env` private; it is excluded from Git and the
+Docker build context. Alternatively, mount a token file read-only or as a Docker
+secret and set `MA_TOKEN_FILE` to its path inside the container (this takes
+precedence over `MA_TOKEN`). The token is not logged or saved in the pending queue.
+
+### Batching and retries
+
+- Successful transfers queue only the affected configured provider. New cover
+  art and other companions in music folders also count; identical duplicates,
+  unsupported loose files, and failed transfers do not.
+- After `MA_SYNC_DEBOUNCE_SECONDS` (default 30) without further library changes,
+  one `music/sync` request includes all queued providers. Media types are left
+  unrestricted so audiobook providers can sync too. Leave either provider ID
+  empty to skip automatic sync for that library.
+- Active upload metadata, `.partial` files anywhere in visible uploads, or files
+  still waiting to settle postpone the request. Unreadable metadata defers it
+  too. An abandoned upload can therefore delay syncing until resolved.
+- Each request has a `MA_SYNC_TIMEOUT_SECONDS` timeout (default 5). HTTP errors,
+  authentication failures, timeouts, and API-level errors retain the queue and
+  retry with exponential backoff from `MA_SYNC_RETRY_SECONDS` (default 30), capped
+  at 300 seconds. A request briefly occupies the single worker, but failure never
+  undoes a completed file move.
+- Pending provider IDs are stored in `uploads/.sorter/ma-sync.json` and recovered
+  after a restart, with a fresh quiet period. Only IDs still configured are
+  retried. If changing Music Assistant servers, resolve or clear the old pending
+  queue while the sorter is stopped. Do not edit state during processing.
+- Success means Music Assistant **accepted the sync request**, not that indexing
+  has finished. Retrying after a lost response or crash can issue a duplicate
+  request; delivery is not exactly-once. External changes made directly to the
+  destination library are not tracked by this feature.
+
 ## Permissions
 
 DumbDrop currently creates root-owned upload directories. The sorter defaults
@@ -146,7 +209,7 @@ uses the same mise configuration. Cargo manages crates under the mise-managed
 toolchain; OS build packages are installed only in the Docker builder stage.
 Tests use temporary directories, never your real uploads or library.
 
-The optimized executable measured approximately 1.8 MiB, with about 3.3 MiB
-resident memory in a brief empty-library smoke test on the development AMD64
-host. This is not a Pi benchmark or a worst-case memory bound; metadata caches,
-filesystem watches, and extraction all affect usage.
+The worker uses a synchronous HTTP client with Rustls for optional HTTPS calls,
+not an async runtime. Resource usage depends on metadata caches, filesystem
+watches, TLS and extraction; development-host measurements are not Pi benchmarks
+or worst-case memory bounds.

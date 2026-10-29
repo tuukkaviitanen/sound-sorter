@@ -1,3 +1,4 @@
+mod sync_tests;
 use super::*;
 use std::io::Cursor;
 use tempfile::{TempDir, tempdir};

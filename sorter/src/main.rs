@@ -6,7 +6,7 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
-use upload_sorter::{Config, Sorter};
+use upload_sorter::{Config, Sorter, ma_sync::MaConfig};
 
 fn main() -> Result<()> {
     let config = Config::from_env()?;
@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         .open(config.uploads.join(".sorter/worker.lock"))?;
     lock.try_lock_exclusive()
         .context("Another sorter is already running")?;
+    sorter.enable_sync(MaConfig::from_env()?, Instant::now())?;
     // Capacity one coalesces bursts without an unbounded event queue.
     let (tx, rx) = mpsc::sync_channel(1);
     // Keep the channel connected even if watcher initialization fails.
@@ -76,12 +77,22 @@ fn main() -> Result<()> {
                 .saturating_sub(last_scan.elapsed())
                 .max(Duration::from_millis(1))
         };
+        let wait = sorter
+            .sync_wait(Instant::now())
+            .map_or(wait, |sync| wait.min(sync));
         let event = rx.recv_timeout(wait).is_ok();
         while rx.try_recv().is_ok() {}
         let now = Instant::now();
-        if event || sorter.pending || now.duration_since(last_scan) >= config.reconcile {
+        if event
+            || sorter.pending
+            || now.duration_since(last_scan) >= config.reconcile
+            || sorter.sync_wait(now) == Some(Duration::ZERO)
+        {
             if let Err(error) = sorter.scan(now) {
                 eprintln!("Scan failed; will retry: {error:#}");
+                sorter.defer_sync(now);
+            } else {
+                sorter.sync_if_due(Instant::now());
             }
             last_scan = now;
         }
