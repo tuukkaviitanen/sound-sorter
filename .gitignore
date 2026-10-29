@@ -1,3 +1,6 @@
 audiobooks/
 music/
 uploads/
+sorter/target/
+.env
+*.local.toml

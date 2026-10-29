@@ -1,0 +1,10 @@
+**
+!mise.toml
+!sorter/
+!sorter/Cargo.toml
+!sorter/Cargo.lock
+!sorter/Dockerfile
+!sorter/src/
+!sorter/src/**
+!sorter/tests/
+!sorter/tests/**

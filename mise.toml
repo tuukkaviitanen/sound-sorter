@@ -1,0 +1,11 @@
+[tools]
+rust = "1.93.1"
+
+[tasks.test]
+run = "cargo test --manifest-path sorter/Cargo.toml --locked"
+
+[tasks.check]
+run = "cargo fmt --manifest-path sorter/Cargo.toml -- --check && cargo clippy --manifest-path sorter/Cargo.toml --locked --all-targets -- -D warnings"
+
+[tasks.build]
+run = "cargo build --manifest-path sorter/Cargo.toml --locked --release"

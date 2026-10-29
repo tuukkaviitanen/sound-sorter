@@ -22,7 +22,9 @@ services:
       BASE_URL: http://localhost:3000
 
   upload-sorter:
-    build: ./sorter
+    build:
+      context: .
+      dockerfile: sorter/Dockerfile
     restart: unless-stopped
     # DumbDrop currently creates root-owned upload directories, so moving files
     # requires root. Set both IDs only if DumbDrop uses the same non-root user.
@@ -32,7 +34,8 @@ services:
       - ./music:/data/music
       - ./audiobooks:/data/audiobooks
     environment:
-      POLL_SECONDS: "2"
+      # Full startup/recovery scans complement filesystem notifications.
+      RECONCILE_SECONDS: "60"
       QUIET_SECONDS: "2"
       EMPTY_DIR_GRACE_SECONDS: "300"
       # Path used inside DumbDrop, for interpreting its upload metadata.
