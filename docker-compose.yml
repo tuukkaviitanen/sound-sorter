@@ -1,0 +1,51 @@
+services:
+  dumbdrop:
+    image: dumbwareio/dumbdrop:latest
+    ports:
+      - 3000:3000
+    volumes:
+      # Where your uploaded files will land
+      - ./uploads:/app/uploads
+    environment:
+      # Explicitly set upload directory inside the container
+      UPLOAD_DIR: /app/uploads
+      # The title shown in the web interface
+      DUMBDROP_TITLE: Drop anythin
+      # Maximum file size in MB
+      MAX_FILE_SIZE: 1024
+      # Optional PIN protection (leave empty to disable)
+      DUMBDROP_PIN: 123456
+      # Upload without clicking button
+      AUTO_UPLOAD: false
+      # The base URL for the application
+      # You must update this to the url you use to access your site
+      BASE_URL: http://localhost:3000
+
+  upload-sorter:
+    build: ./sorter
+    restart: unless-stopped
+    # DumbDrop currently creates root-owned upload directories, so moving files
+    # requires root. Set both IDs only if DumbDrop uses the same non-root user.
+    user: "${SORTER_UID:-0}:${SORTER_GID:-0}"
+    volumes:
+      - ./uploads:/data/uploads
+      - ./music:/data/music
+      - ./audiobooks:/data/audiobooks
+    environment:
+      POLL_SECONDS: "2"
+      QUIET_SECONDS: "2"
+      EMPTY_DIR_GRACE_SECONDS: "300"
+      # Path used inside DumbDrop, for interpreting its upload metadata.
+      DUMBDROP_UPLOAD_DIR: /app/uploads
+      MAX_ZIP_BYTES: "21474836480"
+      MAX_ZIP_FILES: "10000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Destination directories are owned by the host user, uploads by root.
+    cap_add:
+      - DAC_OVERRIDE
