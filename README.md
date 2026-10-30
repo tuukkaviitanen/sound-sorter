@@ -36,6 +36,21 @@ paths when upgrading; ZIP receipts contain absolute container paths. Do not run
 the old Python worker alongside the Rust worker: Python doesn't use the lock.
 `POLL_SECONDS` is replaced by `RECONCILE_SECONDS`.
 
+## Published Docker image
+
+Every push to `main` publishes the **upload-sorter** image to
+`ghcr.io/<owner>/<repository>:latest`, with an additional `sha-<full-commit-sha>`
+tag for a specific revision. Repository names are lowercased. This is the sorter
+image, not the upstream DumbDrop web application.
+
+The image supports `linux/amd64` and `linux/arm64`; Docker automatically selects
+the matching platform. GitHub Actions builds and tests both platforms in parallel
+on native runners (no QEMU), reuses per-platform BuildKit caches, and publishes a
+combined manifest only after both builds succeed. Publishing uses the built-in
+`GITHUB_TOKEN`; no registry secret is required. GHCR package visibility is managed
+separately in GitHub's package settings; make the package public for anonymous
+pulls. The Compose configuration above continues to build locally.
+
 ## Sorting rules
 
 - `uploads/Album/Disc 1/track.flac` → `music/Album/Disc 1/track.flac`.
