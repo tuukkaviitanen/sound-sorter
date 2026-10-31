@@ -181,11 +181,23 @@ impl MusicAssistant {
             .limit(65536)
             .read_json()
             .map_err(|_| anyhow::anyhow!("Music Assistant returned an invalid API response"))?;
+        // HTTP /api returns the command result directly, unlike the WebSocket
+        // API's message envelope. Older servers return null; current servers
+        // return background sync tasks. Never include response data in errors.
+        let direct_result = body.is_null()
+            || body.as_array().is_some_and(|tasks| {
+                tasks.iter().all(|task| {
+                    task.get("id").and_then(Value::as_str).is_some()
+                        && task.get("status").and_then(Value::as_str).is_some()
+                })
+            });
+        let enveloped_result = body.get("message_id").and_then(Value::as_str)
+            == Some("upload-sorter-sync")
+            && body.get("error_code").is_none()
+            && body.get("error").is_none()
+            && body.get("result").is_some();
         ensure!(
-            body.get("message_id").and_then(Value::as_str) == Some("upload-sorter-sync")
-                && body.get("error_code").is_none()
-                && body.get("error").is_none()
-                && body.get("result").is_some(),
+            direct_result || enveloped_result,
             "Music Assistant rejected the sync command or returned an unexpected response"
         );
         Ok(())

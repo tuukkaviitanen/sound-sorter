@@ -123,6 +123,28 @@ fn sends_scoped_request_and_clears_queue() {
     assert!(stored.is_empty());
 }
 #[test]
+fn http_direct_results_clear_the_persistent_queue() {
+    for body in [
+        "null",
+        "[]",
+        r#"[{"id":"music_sync_local-music_track","status":"pending","metadata":{"provider_instance":"local-music"}}]"#,
+    ] {
+        let (url, handle) = server(200, body);
+        let dir = tempdir().unwrap();
+        let state = dir.path().join("ma-sync.json");
+        let now = Instant::now();
+        let mut sync = MusicAssistant::new(config(&url), &state, now).unwrap();
+        sync.mark(false, now).unwrap();
+        sync.send(now + Duration::from_secs(30)).unwrap();
+        let request = handle.join().unwrap();
+        assert_eq!(request["command"], "music/sync");
+        assert_eq!(request["args"]["providers"], json!(["local-music"]));
+        assert_eq!(sync.wait(now), None);
+        let stored: BTreeSet<String> = serde_json::from_reader(File::open(state).unwrap()).unwrap();
+        assert!(stored.is_empty());
+    }
+}
+#[test]
 fn errors_retain_queue_and_retry_with_backoff() {
     let dir = tempdir().unwrap();
     let state = dir.path().join("ma-sync.json");
@@ -150,6 +172,10 @@ fn api_error_malformed_body_and_http_failure_are_retried() {
         ),
         (200, "not JSON"),
         (200, r#"{"result":null}"#),
+        (200, r#"{"error":"secret"}"#),
+        (200, r#"[{"error":"secret"}]"#),
+        (200, r#"[{"id":"task-without-status"}]"#),
+        (200, "true"),
         (401, "Unauthorized"),
         (302, "redirect"),
     ] {
